@@ -19,6 +19,8 @@ library(kableExtra)
 library(broom)
 library(ggpmisc)
 library(cowplot)
+
+all_energy_statistics <- read_csv("https://archive.org/download/all_energy_statistics_202010/all_energy_statistics.csv")
 ```
 
 # Introducción
@@ -36,7 +38,6 @@ La propia electricidad no ha sido exenta de avances tecnológicos, viendo como e
 Se descargó la base de datos [**"International Energy Statistics: Global energy trade & production 1990-2014"**](https://www.kaggle.com/unitednations/international-energy-statistics) desde kaggle. Esta contiene información sobre la producción, conversión, comercialización y consumo de diferentes formas de energía. Entre los años 1990 a 2014, para diferentes países en todo el mundo. En la tabla \@ref(tab:resumenBD), se muestra un resumen por columnas de la base de datos.
 
 ```{r resumenBD}
-all_energy_statistics <- read_csv("all_energy_statistics.csv")
 
 commodity <- all_energy_statistics$commodity_transaction %>% 
   strsplit("-") %>% 
