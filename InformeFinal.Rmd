@@ -1,0 +1,371 @@
+---
+title: "Evolución de la producción eléctrica mundial"
+author: "José Costa"
+date: "12-10-2020"
+output: 
+ bookdown::pdf_document2:
+      fig_caption: true
+      toc: no
+bibliography: biblio.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F, error = F)
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "")
+
+library(readr)
+library(tidyverse)
+library(kableExtra)
+library(broom)
+library(ggpmisc)
+library(cowplot)
+```
+
+# Introducción
+
+A finales del siglo XIX, durante la segunda revolución industrial, comienza la producción masiva de electricidad [@priestley1775history]. Desde entonces esta forma de energía ha sido el impulsor de avances tecnológicos sin precedentes. Hoy en día nuestra sociedad esta estrechamente ligada con la electricidad, siendo la principal forma de energía utilizada a nivel mundial [@safarzynska2011industry].
+
+Existen múltiples formas de generar electricidad, y en la actualidad coexisten muchas de ellas. Hay varias maneras de clasificarlas, la mas común es según la fuente o sustrato que se utiliza para generarla (energía eólica, solar, nuclear, etc.). Estas suelen agruparse en una subcategoría según si el recurso que utilizan es renovable, es decir virtualmente inagotable ya sea por su abundancia o porque se renueva naturalmente en los ciclos biogeoquímicos, o no renovables, que implica un sustrato limitado que se consume en el proceso de generación de electricidad y que eventualmente terminará agotándose. [@gonzalez2009energias]
+
+La propia electricidad no ha sido exenta de avances tecnológicos, viendo como en los últimos años nuevas y mas eficientes formas de producción se empiezan a utilizar. Entonces la pregunta que surgen y se pretenden responder en este trabajo son: ¿De donde proviene la electricidad que utilizamos? y ¿Cómo su fuente ha variado a lo largo de los años?
+
+# Metodología
+
+## Bases de datos
+
+Se descargó la base de datos [**"International Energy Statistics: Global energy trade & production 1990-2014"**](https://www.kaggle.com/unitednations/international-energy-statistics) desde kaggle. Esta contiene información sobre la producción, conversión, comercialización y consumo de diferentes formas de energía. Entre los años 1990 a 2014, para diferentes países en todo el mundo. En la tabla \@ref(tab:resumenBD), se muestra un resumen por columnas de la base de datos.
+
+```{r resumenBD}
+all_energy_statistics <- read_csv("all_energy_statistics.csv")
+
+commodity <- all_energy_statistics$commodity_transaction %>% 
+  strsplit("-") %>% 
+  sapply(tail,1) %>% 
+  unique() %>%
+  head() %>% 
+  paste(collapse = ", ")
+  
+categor <- all_energy_statistics$category %>% 
+  unique() %>% 
+  head() %>% 
+  gsub(pattern = "_", replacement = " ") %>% 
+  paste(collapse = ", ")
+
+unidad <- all_energy_statistics$unit %>%
+  strsplit(",") %>% 
+  sapply(head,1) %>% 
+  unique() %>%
+  paste(collapse = ", ")
+
+resumen <- all_energy_statistics %>% summarise("country or area"=length(unique(country_or_area)),
+                                "commodity transaction"=paste(commodity,"...", length(unique(commodity_transaction))-6, "more"),
+                                    year= paste(min(.$year),"-",max(.$year)),
+                                    unit=unidad,
+                                    quantity=paste(min(quantity),"-", max(quantity)),
+                                    category=paste(categor, "...", length(unique(category))-6, "more")
+                                    )
+
+kable(resumen, caption = "Resumen de la base de datos utilizada") %>% 
+kable_styling(full_width = T,position = "center", latex_options = "HOLD_position") #%>% 
+#column_spec(3:7, width = "5cm")
+
+```
+
+## Filtro
+
+```{r}
+#Filtrar por produccion de electricidad
+
+electricity_production <- all_energy_statistics %>% 
+  filter(grepl("Electricity -",commodity_transaction)) %>%
+  filter(grepl("production",commodity_transaction), category!="total_electricity") %>% 
+  group_by(category, year) %>%  
+  summarise(quantity=sum(quantity))
+```
+
+La base de datos se filtró manteniendo solo las filas que tuvieran las palabras *"electricity"* y *"production"* en su columna *"commodity_transaction"*. De aquí se generó una nueva tabla resumen agrupando por las variables *"category"* y *"year"*, y sumando la variable *"quantity"*, tras corroborar que todas las entradas compartían la misma unidad de medida *"Kilowatt-hours, million"*. La tabla cuenta con `r nrow(electricity_production)` entradas y las siguientes categorías: *"`r unique(electricity_production$category)`"*. (tabla \@ref(tab:resumenBD2))
+
+## Contribución de cada categoría al total por año
+
+```{r}
+gross <- all_energy_statistics %>% 
+  filter(grepl("Electricity - Gross production",commodity_transaction)) %>% 
+  group_by(year) %>% 
+  summarise(total=sum(quantity))
+
+## unir con gross y agregar proporcion de produccion
+
+electricity_production <- left_join(electricity_production, gross)
+
+## calcular diferencia y generar categoría others
+others <- electricity_production %>% 
+  group_by(year) %>% 
+  summarise(total=mean(total), quantity=sum(quantity)) %>% 
+  mutate(category="other", quantity=total-quantity)
+
+electricity_production <- bind_rows(electricity_production, others) %>% 
+  mutate(proporcion=quantity/total)
+
+```
+
+Para calcular el aporte de cada categoría al total de producción de electricidad para cada año, primero se identificó el total de producción anual, alojado en la categoría *"gross production"* de la variable *"commodity_transaction"*. Se agregó este valor a la tabla y se utilizó para calcular la diferencia entre el total reportado y la suma de la producción anual de las categoría, el excedente se guardó en la categoría *"otros"*. \@ref(eq:otros). 
+
+\begin{equation} 
+  P_{bruta} - \sum_{}P_{categoría} = P_{otros}
+  (\#eq:otros)
+\end{equation} 
+
+Se calculó la contribución de cada categoría para cada año, mediante una simple proporción entre la producción para cada categoría y el total por año. \@ref(eq:proporcion).
+
+\begin{equation} 
+  \frac{P_{categoría}}{P_{bruta}}= Contribución
+  (\#eq:proporcion)
+\end{equation} 
+
+```{r}
+## diferencia de produccion de electricidad por año segun categoría
+
+electricity_production <- electricity_production %>% mutate(delta=quantity-lag(quantity))
+
+dif <- electricity_production %>% 
+  group_by(category) %>% 
+  summarise(dif=sum(delta, na.rm = T), factor=quantity[which.max(year)]/quantity[which.min(year)]) %>% 
+  #bind_rows(data.frame(category="total", dif=sum(.$dif), porcentaje=sum(.$dif)/electricity_production$total[which.min(electricity_production$year)]*100)) %>% 
+ # mutate_if(is.numeric, ~round(.,2))
+ arrange(factor)
+```
+
+Finalmente se calculó la diferencia de producción entre años utilizando la función *"lag()"* y generando la columna delta que indica la diferencia de producción entre ese año y el periodo anterior para cada categoría.
+
+Un resumen de la tabla final con los datos procesados, utilizados para realizar los análisis y construir las figuras se muestra en la tabla \@ref(tab:resumenBD2)
+
+```{r resumenBD2}
+resumen2 <-electricity_production %>% head()
+
+  kable(resumen2, align = "c", caption = "Tabla resumen. Contiene los datos con los que se generaron las figuras") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F,position = "center", latex_options = "HOLD_position")
+```
+
+## Modelo
+
+```{r}
+###### fit
+Fit1 <- lm(quantity ~ year + category, data = electricity_production)
+Fit2 <- lm(quantity ~ year * category, data = electricity_production)
+Fit3 <- lm(quantity ~ year * category + I(year^2) , data = electricity_production)
+Fit4 <- lm(quantity ~ (year + I(year^2))*category , data = electricity_production)
+
+Aug1 <- augment(Fit1) %>% full_join(electricity_production)
+Aug2 <- augment(Fit2) %>% full_join(electricity_production)
+Aug3 <- augment(Fit3) %>% full_join(electricity_production)
+Aug4 <- augment(Fit4) %>% full_join(electricity_production)
+
+Modelo1 <- glance(Fit1) %>% dplyr::select(r.squared,AIC) %>% mutate(Modelo = "Fit1", Formula=format(formula(Fit1)))
+Modelo2 <- glance(Fit2) %>% dplyr::select(r.squared,AIC) %>% mutate(Modelo = "Fit2", Formula=format(formula(Fit2)))
+Modelo3 <- glance(Fit3) %>% dplyr::select(r.squared,AIC) %>% mutate(Modelo = "Fit3", Formula=format(formula(Fit3)))
+Modelo4 <- glance(Fit4) %>% dplyr::select(r.squared,AIC) %>% mutate(Modelo = "Fit4", Formula=format(formula(Fit4)))
+
+Modelos <- bind_rows(Modelo1, Modelo2, Modelo3, Modelo4) %>%
+  arrange(desc(AIC)) %>% mutate(Delta_AIC = AIC - min(AIC))
+```
+
+Para capturar la evolución en el tiempo de la producción energética e intentar anticipar su comportamiento en el futuro, se generaron 4 modelos lineales, de los cuales se seleccionó el con mejor ajuste (AIC). Este fue un ajuste cuadrático (parábola) que obtuvo un r de **`r round(Modelos$r.squared[4],3)`** y un AIC de **`r round(Modelos$AIC[4])`** (tabla \@ref(tab:modelos)).
+
+```{r modelos}
+Modelos %>% relocate(Modelo, Formula) %>% 
+  kable(caption = "Modelos probados y sus estadísticas", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F,position = "center", latex_options = "HOLD_position")
+```
+
+# Resultados
+
+## Producción de energía por año según categoría
+
+```{r pdxc, fig.cap="Producción de electricidad por año según categoría. Ajuste cuadrático, los coeficientes se muestran en la tabla debajo", fig.align="center"}
+## produccion de electricidad por año segun categoría
+electricity_production %>% ggplot(aes(year, quantity, color=category)) + 
+  geom_point() + 
+  ylab("Producción (Kilowatt-hours, million)") +
+  geom_smooth(method="lm", formula = y~x+I(x^2)) +
+  theme_light()+
+  #scale_y_continuous(trans = "log10")+
+  scale_color_discrete(labels = c("geothermal", "hydro", "nuclear","other","solar","thermal","tide wave and ocean", "wind")) +
+  stat_poly_eq(formula = y~x+I(x^2), 
+               aes(label = ..rr.label..), vstep = 0.056, 
+               parse = T) +
+  guides(color=guide_legend(override.aes=list(fill=NA)))
+```
+
+```{r}
+ptm <- electricity_production %>% filter(category=="thermal_electricity") %>% ungroup() %>% summarise(proporcion=mean(proporcion)) %>% .$proporcion
+
+pm <- electricity_production %>% filter(!(category %in% c("thermal_electricity", "hydro", "nuclear_electricity"))) %>% group_by(year) %>% summarise(proporcion=sum(proporcion)) %>% .$proporcion %>% mean()
+
+dpn <- last(gross)/first(gross)
+
+```
+
+Los resultados muestran una predominancia de la energía termal sobre las demás. Donde en promedio esta categoría aporta `r round(ptm*100,1)`% a la producción anual. Por detrás le siguen las energías hidroeléctrica y nuclear. Todas las demás se encuentran por debajo `r round(pm*100,2)`% de aporte. Sin embargo en la figura \@ref(fig:diff) se aprecia como todas las categorías están en aumento. En cuanto a producción neta de electricidad esta se ha duplicado entre los años estudiados. El aumento de la producción eléctrica sigue una parábola. Los coeficientes para cada ajuste se encuentran en la tabla \@ref(tab:coeff).
+
+```{r coeff}
+   coef <- as.data.frame(coef(Fit4))
+  
+  coef <- coef %>% rownames() %>% strsplit(.,":") %>% sapply(head,1) %>% cbind("coef"=., coef)
+  coef <- coef %>% rownames() %>% strsplit(.,":") %>% sapply(tail,1) %>% cbind("category"=., coef)
+  
+  rownames(coef)<- NULL
+  coef<-coef %>% mutate(category=substr(category,9,100), coef=as.character(coef))
+  coef$category[1:3] <- "geothermal"
+  coef$coef[1:3] <- c("c", "b", "a")
+  coef$coef[4:10] <- "c"
+  coef$coef[11:17] <- "b"
+  coef$coef[18:24] <- "a"
+  
+ coef <-coef %>% pivot_wider(names_from = coef, values_from=`coef(Fit4)`)
+
+ coef <-coef %>% arrange(desc(a))
+coef %>% relocate(1,a, b, c) %>% mutate_if(is.numeric, ~round(.,1)) %>% 
+  kable(caption = "Coeficientes del ajuste cuadrático de la forma $f(x)=ax^{2}+bx+c$ para cada categoría") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F,position = "center", latex_options = "HOLD_position")
+  
+```
+
+
+## Aumento en la producción de energía entre 2014 y 1990
+
+```{r diff, fig.cap="Diferencia en la producción de electricidad para cada categoría entre los años 2014 y 1990. Escala logarítmica." , fig.align="center", out.width="75%"}
+dif %>% mutate(category=reorder(category,dif)) %>% ggplot(aes(category,dif)) +
+  geom_bar(aes(fill=category), stat = "identity", show.legend = FALSE)+
+  theme_light()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x=element_blank(),
+        plot.margin = margin(0,0,0,0,"pt"))+
+    scale_y_continuous(trans = "log10")+
+    scale_x_discrete(labels = c("geothermal", "hydro", "nuclear","other","solar","thermal","tide wave and ocean", "wind")) +
+  ylab("log(P2014-P1990)")
+
+```
+
+
+
+```{r, eval=F}
+## Aumento en la producción de energía entre 2014 y 1990
+dif %>% mutate(category=reorder(category,factor)) %>% ggplot(aes(category,factor)) +
+  geom_bar(aes(fill=category), stat = "identity", show.legend = FALSE)+
+  theme_light()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x=element_blank())+
+  ylab("Factor de aumento")
+```
+
+
+## Contribución de cada categoría al total de energía producido por año
+
+Finalmente se graficó la contribución al total de producción para cada categoría. (figura \@ref(fig:ppp)). Se aprecia como a pesar del aumento total de producción eléctrica, los porcentajes de contribución no presentan mucha variación, puesto que la mayor contribución a la producción total esta dada por la energía termal, panorama que se mantiene a lo largo de todos los años. Sin embargo al centrarnos en las energías minoritarias (figura \@ref(fig:pem)), podemos ver como si que existe un aumento, capturado por el modelo, en las energías alternativas, solar y eólica.
+
+```{r}
+## porporcion del total de electricidad porducido de cada categoría por año
+gp1 <- electricity_production %>% ggplot(aes(year, quantity)) + 
+  geom_bar(aes(fill=category), stat = "identity", position = "stack") +
+  geom_smooth(aes(year,total), method = "lm", formula = y~x+I(x^2))+
+  theme_light()+
+  theme(legend.position = "none",
+        axis.title = element_text(size=10), 
+        legend.text = element_text(size = 10))+
+  ylab("Producción (Kilowatt-hours, million)")+
+  scale_fill_discrete(labels = c("geothermal", "hydro", "nuclear","other","solar","thermal","tide wave and ocean", "wind")) +
+  stat_poly_eq(formula = y~x+I(x^2),aes(year, total,label = ..rr.label..), parse = T, rr.digits = 3)
+
+```
+
+```{r}
+#normalizado por produccion anual
+gp2 <- electricity_production %>% ggplot(aes(year, quantity)) + 
+  geom_bar(aes(fill=category), stat = "identity", position = "fill")+
+  theme_light()+
+  theme(legend.position="none", 
+        axis.title = element_text(size=10), 
+        legend.text = element_text(size = 10))+
+  scale_fill_discrete(labels = c("geothermal", "hydro", "nuclear","other","solar","thermal","tide wave and ocean", "wind")) +
+  ylab("Fracción del total de producción")
+
+legend <- get_legend(
+    gp2 +
+      guides(color = guide_legend(nrow = 1)) +
+      theme(legend.position = "bottom")
+    )
+
+
+```
+
+```{r ppp, fig.cap="A. Contribución de cada categoria a la producción eléctrica anual. La línea azul representa el modelo cuadrático que ajusta con la producción bruta anual. B. Proporción de contribución de cada categoría al total de producción eléctrica por año" , fig.align="center", fig.height=3.5}
+#grid.arrange(gp1,gp2,ncol=2)
+
+prow <- plot_grid(
+  NULL,gp1,NULL, gp2,
+  align = 'h',
+  labels = c(NA,"A",NA,"B"),
+  hjust = 1,
+  vjust = 1,
+  nrow = 1,
+  rel_widths = c(.05,1,.05,1)
+)
+
+plot_grid(prow, legend, ncol = 1, rel_heights = c(1,.2))
+
+
+```
+
+
+```{r}
+## porporcion del total de electricidad porducido de cada categoría por año minorias
+
+gp3<-electricity_production %>% filter(!category %in% c("thermal_electricity", "nuclear_electricity", "hydro")) %>% ggplot(aes(year, quantity)) + 
+  geom_bar(aes(fill=category), stat = "identity", position = "stack") +
+  theme_light()+
+  theme(legend.position="none",
+        axis.title = element_text(size=10), 
+        legend.text = element_text(size = 10))+
+  scale_fill_discrete(labels = c("geothermal","other","solar","tide wave and ocean", "wind")) +
+  ylab("Producción (Kilowatt-hours, million)")
+
+gp4 <- electricity_production %>% filter(!category %in% c("thermal_electricity", "nuclear_electricity", "hydro")) %>% ggplot(aes(year, quantity)) + 
+  geom_bar(aes(fill=category), stat = "identity", position = "fill") +
+  theme_light()+
+  theme(legend.position="none",
+        axis.title = element_text(size=10), 
+        legend.text = element_text(size = 10))+
+  scale_fill_discrete(labels = c("geothermal","other","solar","tide wave and ocean", "wind")) +
+  ylab("Producción (Kilowatt-hours, million)")
+
+legend2 <- get_legend(
+    gp4 +
+      guides(color = guide_legend(nrow = 1)) +
+      theme(legend.position = "bottom")
+    )
+```
+
+```{r pem, fig.cap="A.Contribución de cada categoria minoritaria a la producción eléctrica anual. B.Proporción de contribución de las categorías minoritarias al total de producción eléctrica por año." , fig.align="center", fig.height=3.2}
+prow2 <- plot_grid(
+  NULL,gp3,NULL, gp4,
+  align = 'h',
+  labels = c(NA,"A",NA,"B"),
+  hjust = 1,
+  vjust = 1.5,
+  nrow = 1,
+  rel_widths = c(.05,1,.05,1)
+)
+plot_grid(prow2, legend2, ncol = 1, rel_heights = c(1,.1))
+
+```
+
+
+# Conclusiones
+
+- La producción de energía aumenta tras año siguiendo una función cuadrática
+- La mayor parte de la producción de energía proviene de termoeléctricas, seguido de hidroeléctricas y energía nuclear.
+- Solo las termoeléctricas aportan en promedio `r  round(ptm*100,1)`% a la producción total anual.
+- Las termoeléctricas son las que han experimentado el mayor aumento, el modelo prevé que la seguirán la energía hídrica y eólica.
+
+# Referencias
+
